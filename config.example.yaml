@@ -1,0 +1,42 @@
+# Copy to config.yaml and fill in.  config.yaml is yours to edit; this file is the template.
+
+paths:
+  # The resume_creator project (your existing resume builder).
+  resume_creator: "../resume_creator"
+  # Master resume data that every tailored resume starts from.
+  master_resume_data: "../resume_creator/resume-data/resume-data.json"
+  # The HTML page Playwright loads to render the resume.
+  resume_html: "../resume_creator/index.html"
+  # Where runtime data lives (DB, generated PDFs, captures, tracker).
+  data_dir: "./data"
+  # Excel application tracker.
+  tracker_xlsx: "./data/applications.xlsx"
+
+claude:
+  model: "claude-sonnet-4-6"   # tailoring model; swap to claude-opus-4-8 for max quality
+  max_tokens: 8000
+  # ANTHROPIC_API_KEY is read from the environment / .env, never stored here.
+
+server:
+  host: "127.0.0.1"
+  port: 8765
+  # If true, capturing a job immediately runs tailoring + render in the background.
+  # If false, you run `python run.py process` manually (more control over API spend).
+  auto_process: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# YOUR JOB CRITERIA  — you said you'd provide these. Fill them in; the fit-scorer
+# uses them to rate each captured job 0-100 so the best ones float to the top of
+# your review queue. Nothing here filters jobs out; it only scores and sorts.
+# ─────────────────────────────────────────────────────────────────────────────
+criteria:
+  titles: []          # e.g. ["Software Engineer", "Backend Engineer", "ML Engineer"]
+  locations: []       # e.g. ["Remote", "Berlin", "Hungary"]
+  arrangement: []     # any of: remote, hybrid, on-site
+  seniority: ""       # e.g. "junior" | "mid" | "senior"
+  must_have: []       # hard wants, weighted heavily, e.g. ["Python", "remote"]
+  nice_to_have: []    # soft wants, e.g. ["Kubernetes", "startup"]
+  avoid: []           # red flags that lower the score, e.g. ["on-call", "PHP"]
+  languages: []       # spoken languages, e.g. ["English", "German"]
+  salary_floor: null  # number in your currency, or null
+  notes: ""           # free-text guidance passed to the fit-scorer
