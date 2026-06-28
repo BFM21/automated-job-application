@@ -1,6 +1,9 @@
 # Secrets
 .env
 
+# Your real config (salary, profile) — only the example is public
+config.yaml
+
 # Runtime data (DB, generated resumes, captured jobs, tracker)
 data/
 *.db
