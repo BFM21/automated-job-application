@@ -13,9 +13,11 @@ paths:
   tracker_xlsx: "./data/applications.xlsx"
 
 claude:
+  backend: "cli"               # "cli" = run via your Claude subscription (no API credits); "api" = pay-per-token
+  cli_command: "claude"        # the Claude Code executable (used only when backend = cli)
   model: "claude-sonnet-4-6"   # tailoring model; swap to claude-opus-4-8 for max quality
-  max_tokens: 8000
-  # ANTHROPIC_API_KEY is read from the environment / .env, never stored here.
+  max_tokens: 8000             # used only when backend = api
+  # ANTHROPIC_API_KEY (env / .env) is only needed when backend = api.
 
 server:
   host: "127.0.0.1"

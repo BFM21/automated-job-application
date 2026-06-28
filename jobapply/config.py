@@ -36,6 +36,10 @@ class Config:
         claude = raw.get("claude", {})
         self.model = claude.get("model", "claude-sonnet-4-6")
         self.max_tokens = int(claude.get("max_tokens", 8000))
+        # "cli" runs `claude -p` under your Claude subscription (no API credits);
+        # "api" uses the Anthropic API (pay-per-token, needs ANTHROPIC_API_KEY).
+        self.backend = claude.get("backend", "cli")
+        self.cli_command = claude.get("cli_command", "claude")
 
         server = raw.get("server", {})
         self.host = server.get("host", "127.0.0.1")
