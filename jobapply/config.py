@@ -48,14 +48,44 @@ class Config:
 
         self.criteria: dict[str, Any] = raw.get("criteria", {})
 
+        # Legal job-board API sources (no login, no ban risk).
+        ja = raw.get("jobapis", {})
+        self.jobapis_enabled: list[str] = ja.get("enabled", ["remotive", "arbeitnow"]) or []
+        self.jobapis_keywords: list[str] = ja.get("keywords", []) or []
+        self.jobapis_max_per_source = int(ja.get("max_per_source", 30))
+
+        # LinkedIn scraper (burner account, read-only sourcing).
+        li = raw.get("linkedin", {})
+        # Explicit search URLs override everything; otherwise URLs are built from
+        # `keywords` (or criteria.titles) + the filters below.
+        self.linkedin_searches: list[str] = li.get("searches", []) or []
+        self.linkedin_keywords: list[str] = li.get("keywords", []) or []
+        self.linkedin_geo_id: str = str(li.get("geo_id", "91000000"))  # 91000000 = European Union
+        self.linkedin_date_posted: str = str(li.get("date_posted", "24h"))  # 24h | week | month
+        # Real Chrome ("chrome") evades CAPTCHA detection better than bundled Chromium.
+        self.linkedin_browser_channel: str = str(li.get("browser_channel", "chrome"))
+        self.linkedin_profile_dir = _resolve(li.get("profile_dir", "./data/linkedin_profile"))
+        self.linkedin_max_jobs = int(li.get("max_jobs_per_search", 25))
+        self.linkedin_headless = bool(li.get("headless", True))
+        self.linkedin_min_delay = float(li.get("min_delay", 2.0))
+        self.linkedin_max_delay = float(li.get("max_delay", 5.0))
+        self.linkedin_debug = bool(li.get("debug", False))
+
         # Derived runtime locations.
         self.db_path = self.data_dir / "jobs.db"
         self.pdf_dir = self.data_dir / "resumes"
         self.captures_dir = self.data_dir / "captures"
+        self.debug_dir = self.data_dir / "debug"
 
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.pdf_dir, self.captures_dir):
             d.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def linkedin_has_searches(self) -> bool:
+        """True if a scrape is possible — explicit URLs, keywords, or criteria titles."""
+        return bool(self.linkedin_searches or self.linkedin_keywords
+                    or self.criteria.get("titles"))
 
 
 def load_config(path: str | Path | None = None) -> Config:

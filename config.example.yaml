@@ -42,3 +42,37 @@ criteria:
   languages: []       # spoken languages, e.g. ["English", "German"]
   salary_floor: null  # number in your currency, or null
   notes: ""           # free-text guidance passed to the fit-scorer
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB-BOARD APIs (automated sourcing — no login, no scraping, no ban risk).
+# This is the default source used by `python run.py`.
+# ─────────────────────────────────────────────────────────────────────────────
+jobapis:
+  # "linkedin" = LinkedIn's PUBLIC guest API (server-side, no login, no ban). Uses
+  # keywords as searches + your criteria for filters. "remotive"/"arbeitnow"/"remoteok"
+  # match keywords against the job TITLE.
+  enabled: ["linkedin", "remotive", "arbeitnow"]
+  keywords: []                        # search terms / title match; empty = criteria.titles
+  max_per_source: 30                  # cap per provider per run
+  # linkedin filters reuse: linkedin.geo_id, linkedin.date_posted, criteria.arrangement, criteria.seniority
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LINKEDIN SCRAPER (DISCOURAGED — LinkedIn restricts/bans automated access).
+# Kept only as an optional manual tool; not used by `python run.py` anymore.
+# ─────────────────────────────────────────────────────────────────────────────
+linkedin:
+  # Searches are BUILT from your criteria — one search per title — so you don't
+  # paste filter links. keywords default to criteria.titles; work-type comes from
+  # criteria.arrangement (remote/hybrid/on-site) and level from criteria.seniority.
+  keywords: []                       # override the search terms (else uses criteria.titles)
+  geo_id: "91000000"                 # 91000000 = European Union. To target a country/city,
+                                     # set the location on LinkedIn Jobs and copy geoId from the URL.
+  date_posted: "24h"                 # 24h | 3d | week | month
+  browser_channel: "chrome"          # real Chrome dodges CAPTCHA detection; "" = bundled Chromium
+  searches: []                       # optional: explicit full URLs that OVERRIDE the built ones
+  profile_dir: "./data/linkedin_profile"  # persistent burner session (gitignored)
+  max_jobs_per_search: 25            # cap per search per run
+  headless: true                     # set false to watch the browser on first run
+  min_delay: 2.0                     # seconds between actions (human-like pacing)
+  max_delay: 5.0
+  debug: false                       # true = screenshot failed extractions to data/debug/

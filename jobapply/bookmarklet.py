@@ -47,6 +47,64 @@ _SRC = r"""
 """
 
 
+# Harvest bookmarklet: run on a LinkedIn jobs SEARCH page. Auto-scrolls the result
+# list, clicks each card, reads the detail pane, and POSTs them all in one batch.
+# Runs in YOUR real logged-in tab (no separate browser/account). No `//` comments
+# here — the minifier joins lines, which would swallow the rest of the script.
+_HARVEST_SRC = r"""
+(async function(){
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+  function txt(d,sel){ var e=d.querySelector(sel); return e?(e.textContent||'').trim():''; }
+  function clean(d,sel){
+    var e=d.querySelector(sel); if(!e) return '';
+    var html=(e.innerHTML||'').replace(/<\s*(br|\/p|\/div|\/li|\/h[1-6])\s*\/?>/gi,'\n').replace(/<li[^>]*>/gi,'• ');
+    var t=html.replace(/<[^>]+>/g,'');
+    var ta=document.createElement('textarea'); ta.innerHTML=t; t=ta.value;
+    return t.replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+  }
+  var MAX=25, ids=[], seen={};
+  for(var s=0;s<12;s++){
+    var as=document.querySelectorAll("a[href*='/jobs/view/']");
+    for(var k=0;k<as.length;k++){
+      var m=(as[k].getAttribute('href')||'').match(/\/jobs\/view\/(\d+)/);
+      if(m && !seen[m[1]]){ seen[m[1]]=1; ids.push(m[1]); }
+    }
+    if(ids.length>=MAX) break;
+    if(as.length) as[as.length-1].scrollIntoView({block:'end'});
+    window.scrollBy(0,1600);
+    await sleep(800);
+  }
+  ids=ids.slice(0,MAX);
+  if(!ids.length){ alert('No job results found. Open a LinkedIn Jobs SEARCH page first, then click this.'); return; }
+  var box=document.createElement('div');
+  box.style.cssText='position:fixed;top:12px;right:12px;z-index:99999;background:#20242c;color:#fff;padding:10px 14px;border-radius:8px;font:13px sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.3)';
+  document.body.appendChild(box);
+  var jobs=[];
+  for(var i=0;i<ids.length;i++){
+    box.textContent='Gathering '+(i+1)+'/'+ids.length+' ('+jobs.length+' ok)';
+    try{
+      var resp=await fetch('https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/'+ids[i],{credentials:'include'});
+      var d=new DOMParser().parseFromString(await resp.text(),'text/html');
+      var title=txt(d,'.top-card-layout__title')||txt(d,'h2');
+      var company=txt(d,'.topcard__org-name-link')||txt(d,'.topcard__flavor--metadata');
+      var loc=txt(d,'.topcard__flavor--bullet');
+      var desc=clean(d,'.show-more-less-html__markup')||clean(d,'.description__text');
+      if(desc) jobs.push({title:title,company:company,location:loc,url:'https://www.linkedin.com/jobs/view/'+ids[i]+'/',source:'linkedin',description:desc});
+    }catch(e){}
+    await sleep(500);
+  }
+  box.textContent='Sending '+jobs.length+' jobs to the pipeline...';
+  try{
+    var r=await fetch('__ENDPOINT__',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobs:jobs})});
+    var j=await r.json();
+    box.textContent='Done - captured '+(j.captured||0)+' new of '+jobs.length+(j.processing?'. Tailoring...':'');
+  }catch(e){ box.textContent='Send failed - is the pipeline server (python run.py serve) running?'; }
+  await sleep(6000);
+  box.remove();
+})();
+"""
+
+
 def _minify(src: str) -> str:
     # Naive whitespace collapse — fine for a bookmarklet (no string literals span lines).
     lines = [ln.strip() for ln in src.strip().splitlines()]
@@ -58,25 +116,43 @@ def build_bookmarklet(endpoint: str) -> str:
     return "javascript:" + body
 
 
+def build_harvest_bookmarklet(endpoint: str) -> str:
+    body = _minify(_HARVEST_SRC).replace("__ENDPOINT__", endpoint)
+    return "javascript:" + body
+
+
 def install_page(base_url: str) -> str:
-    endpoint = base_url.rstrip("/") + "/capture"
-    href = build_bookmarklet(endpoint)
-    # Escape double quotes so it sits safely inside the href attribute.
-    href_attr = href.replace('"', "&quot;")
+    base = base_url.rstrip("/")
+    one = build_bookmarklet(base + "/capture").replace('"', "&quot;")
+    harvest = build_harvest_bookmarklet(base + "/capture-batch").replace('"', "&quot;")
     return f"""<!doctype html><html><head><meta charset="utf-8"/>
-<title>Install the LinkedIn capture bookmarklet</title>
-<style>body{{font:16px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;max-width:680px;
+<title>Install the LinkedIn capture bookmarklets</title>
+<style>body{{font:16px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;max-width:720px;
 margin:40px auto;padding:0 20px;color:#20242c}}
 .book{{display:inline-block;background:#2f62b0;color:#fff;padding:10px 18px;
-border-radius:8px;text-decoration:none;font-weight:600}}
+border-radius:8px;text-decoration:none;font-weight:600;margin:4px 0}}
+.harvest{{background:#1f9d57}}
 code{{background:#f0f2f5;padding:2px 6px;border-radius:4px}}
-ol{{padding-left:20px}} li{{margin:8px 0}}</style></head><body>
-<h1>Capture LinkedIn jobs</h1>
+ol{{padding-left:20px}} li{{margin:8px 0}} .note{{color:#5b6472;font-size:14px}}</style></head><body>
+<h1>LinkedIn capture bookmarklets</h1>
+<p>Show your bookmarks bar (<code>Ctrl+Shift+B</code>) and drag <b>both</b> buttons onto it.
+Keep the pipeline server running while you use them.</p>
+
+<h3>🧲 Harvest search page <span class="note">(the autonomous one)</span></h3>
+<p>Drag to bookmarks:&nbsp; <a class="book harvest" href="{harvest}">🧲 Harvest jobs</a></p>
 <ol>
-<li>Show your browser's bookmarks bar (<code>Ctrl+Shift+B</code>).</li>
-<li>Drag this button onto it:&nbsp; <a class="book" href="{href_attr}">📌 Capture job</a></li>
-<li>Open any LinkedIn job posting, then click the bookmark.</li>
-<li>The job is tailored and shows up in your <a href="{base_url}">review dashboard</a>.</li>
+<li>Open a LinkedIn <b>Jobs search</b> page with your filters applied.</li>
+<li>Click the bookmark. It auto-scrolls, opens each job, and gathers up to 25 — you'll
+see a progress box top-right.</li>
+<li>All of them get tailored in one batch and appear in your
+<a href="{base_url}">review queue</a>.</li>
 </ol>
-<p>Keep the pipeline server running while you capture jobs.</p>
+
+<h3>📌 Capture this job <span class="note">(single posting)</span></h3>
+<p>Drag to bookmarks:&nbsp; <a class="book" href="{one}">📌 Capture job</a></p>
+<p class="note">On a single job posting, grabs just that one.</p>
+
+<p class="note">⚠ The harvest runs in your real session with human-like pauses. Use it
+occasionally and at modest volume — don't blast it repeatedly, so LinkedIn doesn't
+flag your account.</p>
 </body></html>"""

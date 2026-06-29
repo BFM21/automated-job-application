@@ -27,6 +27,10 @@ class CaptureIn(BaseModel):
     description: str = ""
 
 
+class CaptureBatchIn(BaseModel):
+    jobs: list[CaptureIn] = []
+
+
 def create_app(cfg: Config) -> FastAPI:
     app = FastAPI(title="Job Apply Pipeline")
     store = Store(cfg.db_path)
@@ -44,6 +48,10 @@ def create_app(cfg: Config) -> FastAPI:
         job = store.get(job_id)
         if job:
             process_job(job, cfg, store, tracker)
+
+    def _background_process_all() -> None:
+        from .pipeline import process_new
+        process_new(cfg, store, tracker)  # batches CLI tailoring into one call
 
     @app.post("/capture")
     def capture(payload: CaptureIn):
@@ -67,6 +75,27 @@ def create_app(cfg: Config) -> FastAPI:
                              daemon=True).start()
         return {"status": "captured", "id": job.id,
                 "processing": cfg.auto_process}
+
+    @app.post("/capture-batch")
+    def capture_batch(payload: CaptureBatchIn):
+        captured = 0
+        for item in payload.jobs:
+            if not item.description.strip():
+                continue
+            job = Job(
+                title=item.title.strip(), company=item.company.strip(),
+                location=item.location.strip(), url=item.url.strip(),
+                source=item.source.strip() or "linkedin",
+                description=item.description.strip(),
+            )
+            if store.upsert(job):
+                tracker.upsert(store.get(job.id))
+                captured += 1
+        if captured and cfg.auto_process:
+            # One background batch run (CLI tailoring batched into a single call).
+            threading.Thread(target=_background_process_all, daemon=True).start()
+        return {"status": "ok", "received": len(payload.jobs),
+                "captured": captured, "processing": bool(captured and cfg.auto_process)}
 
     @app.get("/api/jobs")
     def api_jobs():

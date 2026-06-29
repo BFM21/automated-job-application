@@ -125,29 +125,37 @@ def _extract_json(text: str) -> dict[str, Any]:
     return json.loads(text[start:end + 1])
 
 
-def _run_cli(system: str, user: str, cfg: Config) -> dict[str, Any]:
-    """Claude Code CLI backend (`claude -p`) — runs under your subscription."""
+def _claude_cli(prompt: str, cfg: Config) -> str:
+    """Run one `claude -p` call and return the model's text reply.
+
+    Crucially, strips ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN from the child's
+    environment so Claude Code uses your *subscription* (free) instead of falling
+    back to API billing on the inherited key.
+    """
     exe = shutil.which(cfg.cli_command) or cfg.cli_command  # resolves claude.cmd on Windows
-    prompt = f"{system}\n\n{user}\n\n{_JSON_INSTRUCTION}"
     cmd = [exe, "-p", "--output-format", "json", "--model", cfg.model]
     # Windows can't CreateProcess a .cmd/.bat shim directly — route it through cmd.exe.
     if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
         cmd = ["cmd", "/c", *cmd]
+
+    env = dict(os.environ)
+    env.pop("ANTHROPIC_API_KEY", None)
+    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+
     try:
         proc = subprocess.run(
             cmd, input=prompt, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=600,
+            encoding="utf-8", errors="replace", timeout=1800, env=env,
         )
     except FileNotFoundError as exc:
         raise RuntimeError(
-            f"Could not run '{cfg.cli_command}'. Is Claude Code installed and on PATH? "
-            "Install it, or set claude.cli_command in config.yaml."
+            f"Could not run '{cfg.cli_command}'. Is Claude Code installed? "
+            "Set claude.cli_command in config.yaml to its full path."
         ) from exc
 
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"claude CLI failed (exit {proc.returncode}): {proc.stderr.strip()[:500]}"
-        )
+        detail = (proc.stderr or proc.stdout or "").strip()[:500]
+        raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {detail}")
 
     out_text = proc.stdout.strip()
     # --output-format json wraps the reply in an envelope; unwrap to the model text.
@@ -156,11 +164,15 @@ def _run_cli(system: str, user: str, cfg: Config) -> dict[str, Any]:
         if isinstance(envelope, dict) and "result" in envelope:
             if envelope.get("is_error"):
                 raise RuntimeError(f"claude CLI error: {str(envelope.get('result'))[:500]}")
-            out_text = str(envelope["result"])
+            return str(envelope["result"])
     except json.JSONDecodeError:
         pass  # stdout was already the raw model text
+    return out_text
 
-    return _extract_json(out_text)
+
+def _run_cli(system: str, user: str, cfg: Config) -> dict[str, Any]:
+    """Single-job CLI backend (`claude -p`) — runs under your subscription."""
+    return _extract_json(_claude_cli(f"{system}\n\n{user}\n\n{_JSON_INSTRUCTION}", cfg))
 
 
 _BACKENDS = {"cli": _run_cli, "api": _run_api}
@@ -216,3 +228,67 @@ def enrich(job: Job, cfg: Config) -> tuple[int, str, Path]:
         json.dump(tailored, fh, ensure_ascii=False, indent=2)
 
     return fit_score, fit_reasons, out_path
+
+
+# ── batched CLI (one claude call for many jobs) ──────────────────────────────
+def _extract_json_array(text: str) -> list[dict[str, Any]]:
+    start, end = text.find("["), text.rfind("]")
+    if start == -1 or end <= start:
+        raise RuntimeError(f"No JSON array in batch output: {text[:200]!r}")
+    return json.loads(text[start:end + 1])
+
+
+def _build_batch_prompt(master: dict, jobs: list[Job], criteria: dict) -> str:
+    parts = [
+        "## Candidate master resume (JSON)\n```json",
+        json.dumps(master, ensure_ascii=False, indent=2), "```",
+        "\n## Candidate job-search criteria\n```json",
+        json.dumps(criteria, ensure_ascii=False, indent=2), "```",
+        f"\n## {len(jobs)} jobs to process",
+    ]
+    for i, j in enumerate(jobs, 1):
+        parts.append(
+            f"\n### Job {i}: {j.title} at {j.company} — {j.location}\n"
+            f"URL: {j.url}\n\n{j.description}"
+        )
+    parts.append(
+        f"\n## Task\nFor EACH of the {len(jobs)} jobs above:\n"
+        "1. Score 0-100 how well it fits the candidate (weight criteria.must_have "
+        "heavily; penalize anything in criteria.avoid).\n"
+        "2. Produce tailored_resume_data: the same resume, same schema and `id` "
+        "fields as the master, re-emphasized and rephrased for THAT job. Keep it "
+        "truthful — never invent experience the candidate lacks.\n\n"
+        f"Respond with ONLY a JSON array of exactly {len(jobs)} objects (no markdown, "
+        "no prose). Each object: {\"n\": <job number>, \"fit_score\": <int 0-100>, "
+        "\"fit_reasons\": \"<2-3 sentences>\", \"tailored_resume_data\": <object>}"
+    )
+    return _SYSTEM + "\n\n" + "\n".join(parts)
+
+
+def enrich_batch(jobs: list[Job], cfg: Config) -> dict[str, tuple[int, str, Path]]:
+    """Score + tailor many jobs in ONE claude call. Returns {job_id: (fit, reasons,
+    json_path)} for every job the model returned; callers handle any omitted ones."""
+    master = _load_master(cfg)
+    sent = json.loads(json.dumps(master))
+    sent.get("personal", {}).pop("photo", None)  # photo restored via _restore_identity
+
+    text = _claude_cli(_build_batch_prompt(sent, jobs, cfg.criteria), cfg)
+    by_n: dict[int, dict] = {}
+    for item in _extract_json_array(text):
+        try:
+            by_n[int(item["n"])] = item
+        except (KeyError, ValueError, TypeError):
+            continue
+
+    results: dict[str, tuple[int, str, Path]] = {}
+    for idx, job in enumerate(jobs, 1):
+        item = by_n.get(idx)
+        if not item or "tailored_resume_data" not in item:
+            continue  # caller falls back to a single-job call for this one
+        tailored = _restore_identity(item["tailored_resume_data"], master)
+        out_path = cfg.pdf_dir / f"{job.id}.json"
+        with open(out_path, "w", encoding="utf-8") as fh:
+            json.dump(tailored, fh, ensure_ascii=False, indent=2)
+        results[job.id] = (int(item["fit_score"]),
+                           str(item.get("fit_reasons", "")).strip(), out_path)
+    return results
